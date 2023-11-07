@@ -29,6 +29,7 @@ from pydantic import BaseModel
 from datamodel_code_generator.format import CodeFormatter, PythonVersion
 from datamodel_code_generator.imports import IMPORT_ANNOTATIONS, Import, Imports
 from datamodel_code_generator.model import pydantic as pydantic_model
+from datamodel_code_generator.model import pydantic_v2 as pydantic_model_v2
 from datamodel_code_generator.model.base import (
     ALL_MODEL,
     UNDEFINED,
@@ -39,7 +40,7 @@ from datamodel_code_generator.model.base import (
 )
 from datamodel_code_generator.model.enum import Enum, Member
 from datamodel_code_generator.parser import DefaultPutDict, LiteralType
-from datamodel_code_generator.reference import ModelResolver, Reference
+from datamodel_code_generator.reference import ModelResolver, ModelType, Reference
 from datamodel_code_generator.types import DataType, DataTypeManager, StrictTypes
 from datamodel_code_generator.util import Protocol, runtime_checkable
 
@@ -1050,6 +1051,37 @@ class Parser(ABC):
                 class_name=True,
             ).name
 
+    def __change_field_name(
+        self,
+        models: List[DataModel],
+    ) -> None:
+        for model in models:
+            if not isinstance(
+                model, (pydantic_model_v2.BaseModel, pydantic_model.BaseModel)
+            ):
+                continue
+            field_names: Set[str] = {f.name for f in model.fields}
+            for field in model.fields:
+                field_types = set()
+                for data_type in field.data_type.all_data_types:
+                    if not data_type.reference:
+                        continue
+                    field_types.add(data_type.reference.short_name)
+                    field_types.add(data_type.alias)
+                    # TODO: Check generic type like List, Dict
+                if field.name in field_types:
+                    field_name_resolver = self.model_resolver.field_name_resolvers[
+                        ModelType.PYDANTIC
+                    ]
+                    field_name = field_name_resolver.get_valid_name(
+                        field.name, field_names | field_types
+                    )
+                    if not field.original_name:
+                        field.original_name = field.name
+                    field_names.remove(field.name)
+                    field_names.add(field_name)
+                    field.name = field_name
+
     def parse(
         self,
         with_import: Optional[bool] = True,
@@ -1170,6 +1202,7 @@ class Parser(ABC):
         for module, models, init, imports, scoped_model_resolver in processed_models:
             # process after removing unused models
             self.__change_imported_model_name(models, imports, scoped_model_resolver)
+            self.__change_field_name(models)
 
         for module, models, init, imports, scoped_model_resolver in processed_models:
             result: List[str] = []
